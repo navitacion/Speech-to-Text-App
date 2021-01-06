@@ -1,0 +1,5 @@
+[server]
+port = 80
+enableCORS = false
+maxUploadSize = 2096
+enableXsrfProtection = false
