@@ -1,17 +1,20 @@
-import time, yaml, random
+import time
+import yaml
+import datetime
 import streamlit as st
 from azure.storage.blob import BlockBlobService
+from pydub import AudioSegment
 
-from src.utils import read_and_write_wav, recognize_audio, download_link, save_output_to_blob
+from src.utils import recognize_audio, download_link, save_output_to_blob, AudioReader
 
 st.set_option('deprecation.showfileUploaderEncoding', False)
 
-# config
-random_code = random.randint(0, 10000)
 # 分割する秒数
 tmp_length = 180
 # 音声認識にかける時間
-recognize_time = 100
+recognize_time = 150
+# タイムゾーン
+JST = datetime.timezone(datetime.timedelta(hours=+9), 'JST')
 
 
 def app():
@@ -19,13 +22,13 @@ def app():
     Webアプリのメイン関数
     """
     # App  ##################################################
-    st.title('音声文字起こしデモアプリ')
+    st.title('音声文字起こしアプリ')
     st.markdown('このアプリはMicrosoft AzureのサービスであるSpeech Serviceを使用しています')
     st.markdown('[Azure公式ドキュメント](https://docs.microsoft.com/ja-jp/azure/cognitive-services/speech-service/get-started-speech-to-text?tabs=script%2Cwindowsinstall&pivots=programming-language-python)')
-    st.markdown('[ソースコード](https://github.com/navitacion/Speech-to-Text-Demo)')
+    st.markdown('[ソースコード](https://github.com/ledge-ai/ledge-research-speech-to-text-app)')
 
     # Config  ###############################
-    # Get Account Information from yaml
+    # YAMLからAzureの認識情報を抽出
     with open('config.yml', 'r') as yml:
         config = yaml.load(yml, Loader=yaml.BaseLoader)
     speech_key = config['subscription']['speech_key']
@@ -37,23 +40,58 @@ def app():
     blob_client = BlockBlobService(
         account_name=blob_account_name, account_key=blob_account_key)
 
-    # Setting
+    # 設定
     st.markdown('---')
     st.subheader('設定')
-    # Language
-    language = st.selectbox("言語", ['Japanese', 'English'])
+    # 言語
+    language = st.selectbox('言語', ['日本語', '英語'])
+
+    # ファイル or YouTube
+    input_file = st.radio('読み込み先', options=['ファイルから', 'YouTubeから'])
+    filenames = []
+    audio_file_path = None
+
+    # Download from YouTube  #########################################
+    if input_file == 'YouTubeから':
+        # YouTube URLで音声ダウンロード
+        st.markdown('---')
+        st.subheader('YouTube URL')
+        url = st.text_input('')
+        reader = AudioReader(origin='youtube', length=tmp_length, blob_client=blob_client)
+
+        if len(url) != 0:
+            with st.spinner('読み込み中...'):
+                filenames, audio_file_path = reader(url)
+                time.sleep(1)
+            st.success('取り込み完了')
 
     # File Uploader  #########################################
-    st.markdown('---')
-    st.subheader('音声ファイルを選択')
-    st.markdown('ファイル形式は「wav, m4a, mp3」に対応しています')
-    uploaded_file = st.file_uploader('', type=['wav', 'm4a', 'mp3'])
-    if uploaded_file is not None:
-        filenames, audio_file_path = read_and_write_wav(uploaded_file, tmp_length, blob_client)
-        time.sleep(1)
-        st.success('取り込み完了')
+    elif input_file == 'ファイルから':
+        st.markdown('---')
+        st.subheader('音声ファイルを選択')
+        st.markdown('ファイル形式は「wav, m4a, mp3, mp4」に対応しています')
+        uploaded_file = st.file_uploader('', type=['wav', 'm4a', 'mp3', 'mp4'])
+        reader = AudioReader(origin='file', length=tmp_length, blob_client=blob_client)
 
-        # Audio Recognition  ####################
+        if uploaded_file is not None:
+            with st.spinner('読み込み中...'):
+                filenames, audio_file_path = reader(uploaded_file)
+                time.sleep(1)
+            st.success('取り込み完了')
+
+    else:
+        pass
+
+    # Audio Recognition  ####################
+    if len(filenames) != 0:
+        st.markdown('---')
+
+        # 予想認識完了時間の出力
+        recognize_time_all = recognize_time * len(filenames)
+        recognize_time_all = datetime.datetime.now(JST) + datetime.timedelta(seconds=recognize_time_all)
+        recognize_time_all = recognize_time_all.strftime('%Y-%m-%d %H:%M:%S')
+        st.markdown('完了予定時間: {}'.format(recognize_time_all))
+
         output = ""
         with st.spinner('認識中...'):
             progressbar = st.progress(0)
@@ -61,6 +99,10 @@ def app():
                 output = recognize_audio(output, speech_key, service_region, language, filename, recognize_time)
                 progressbar.progress((i+1) / len(filenames))
         st.success('認識完了')
+
+        # テキストを改行。
+        for s in ['?', '.', '。']:
+            output = output.replace(s, f'{s}\n')
 
         # Output
         st.markdown('---')

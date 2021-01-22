@@ -2,64 +2,163 @@ import time, datetime, wave, base64, os, uuid
 from datetime import datetime, timedelta, timezone
 import numpy as np
 from scipy.io import wavfile
+import youtube_dl
 from pydub import AudioSegment
 
 import azure.cognitiveservices.speech as speechsdk
 
 
-def read_and_write_wav(uploaded_file, length=180, blob_client=None, save_to_blob=True):
-    """
-    BytesIO形式のwavファイルを読み込み、指定したディレクトリに書き出す関数
-    length(sec)ごとにデータを分割する
-    ---------------------------
-    Parameters
+class AudioReader:
+    def __init__(self, origin='file', length=180, blob_client=None):
+        self.today = datetime.now(tz=timezone(timedelta(hours=+9), 'JST'))
+        self.today = self.today.strftime('%Y%m%d-%H%M%S')
+        self.audio_file_path = f'./tmp/audio_{self.today}_{uuid.uuid4()}.wav'
 
-    uploaded_file: BytesIO
-        音声データ
-    filename: str
-        出力先パス
-    blob_client: azure.storage.blob.BlockBlobService
-        azure storageのクライアントインスタンス
-    """
+        self.origin = origin
+        self.length = length
+        self.blob_client = blob_client
 
-    # 現在の時刻を取得
-    today = datetime.now(tz=timezone(timedelta(hours=+9), 'JST'))
-    today = today.strftime('%Y%m%d-%H%M%S')
-    audio_file_path = f'./tmp/audio_{today}_{uuid.uuid4()}.wav'
 
-    # wav, m4a, mp3 -> wav
-    # 一時的に保存
-    # Reference: https://github.com/jiaaro/pydub/blob/master/API.markdown
-    audio = AudioSegment.from_file(uploaded_file)
-    audio.export(audio_file_path, format='wav')
-    filenames = []
+    def _preprocess(self, audio):
+        """
+        AudioSegment形式データの前処理
+        ---------------------------
+        Parameters
 
-    # wavファイルを再読み込み
-    with wave.open(audio_file_path, 'r') as wr:
-        ch = wr.getnchannels()
-        fr = wr.getframerate()
-        fn = wr.getnframes()
-        data = wr.readframes(fn)
-        total_time = 1.0 * fn / fr
-        frames = int(ch * fr * length)
+        audio: pydub.AudioSegment
+            音声データ
 
-    X = np.frombuffer(data, dtype=np.int16)
+        ---------------------------
+        Returns
 
-    # length単位で音声ファイルを切り出す
-    grid_num = int(np.ceil(total_time / length))
-    for i in range(grid_num):
-        filename = f'./input/target_{today}_{uuid.uuid4()}_{i}.wav'
-        wavfile.write(filename, fr, X[i * frames:i * frames + frames])
-        filenames.append(filename)
+        audio: pydub.AudioSegment
+            前処理後の音声データ
+        """
+        audio = audio.set_channels(1)
 
-    # 元の音声ファイルをBlobに保存
-    if save_to_blob:
-        blob_client.create_blob_from_path('speechaudiofiles', audio_file_path.split('/')[-1], audio_file_path)
+        return audio
 
-    # 元の音声ファイルを削除
-    os.remove(audio_file_path)
 
-    return filenames, audio_file_path
+    def read_write_tmp_file(self, inp, save_to_blob=False):
+        """
+        BytesIO形式やYouTube URLを元に音声ファイルを読み込む
+        前処理をかけた後、一次ファイルとしてWAVファイルで保存する
+        pathはself.audio_file_path
+        """
+        if self.origin == 'file':
+            audio = self.from_byte(inp)
+        elif self.origin == 'youtube':
+            audio = self.from_YouTube(inp)
+
+        else:
+            raise NotImplementedError
+
+        # 前処理
+        audio = self._preprocess(audio)
+        # tmpとしてWAVで保存
+        audio.export(self.audio_file_path, format='wav')
+
+        # 元の音声ファイルをBlobに保存
+        if save_to_blob:
+            self.blob_client.create_blob_from_path(
+                'speechaudiofiles',
+                self.audio_file_path.split('/')[-1],
+                self.audio_file_path)
+
+
+    def from_byte(self, byte_file):
+        """
+        BytesIO形式のwavファイルを読み込む
+        ---------------------------
+        Parameters
+        byte_file: BytesIO
+            音声データ
+
+        ---------------------------
+        Returns
+
+        audio: pydub.AudioSegment
+            音声データ
+        """
+        audio = AudioSegment.from_file(byte_file)
+
+        return audio
+
+
+    def from_YouTube(self, url):
+        """
+        YouTubeのURLから音声ファイルを読み込む
+        ---------------------------
+        Parameters
+        byte_file: BytesIO
+            音声データ
+
+        ---------------------------
+        Returns
+
+        audio: pydub.AudioSegment
+            音声データ
+        """
+        tmp_mp3_path = "./tmp/sample_music"
+
+        # YouTube -> mp3
+        # Reference: https://shizenkarasuzon.hatenablog.com/entry/2019/02/03/123545
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl':  tmp_mp3_path + '.%(ext)s',
+            'postprocessors': [
+                {'key': 'FFmpegExtractAudio',
+                 'preferredcodec': 'mp3',
+                 'preferredquality': '192'},
+                {'key': 'FFmpegMetadata'},
+            ],
+        }
+
+        ydl = youtube_dl.YoutubeDL(ydl_opts)
+        _ = ydl.extract_info(url, download=True)
+        audio = AudioSegment.from_mp3(tmp_mp3_path + '.mp3')
+        os.remove(tmp_mp3_path + '.mp3')
+
+        return audio
+
+
+    def divide_wav(self):
+        """
+        tmpファイル(wav)を任意の長さに分割する
+        分割後の音声ファイルは./inputに格納
+        :return:
+        """
+        assert os.path.exists(self.audio_file_path), ''
+
+        filenames = []
+
+        # wavファイルを再読み込み
+        with wave.open(self.audio_file_path, 'r') as wr:
+            ch = wr.getnchannels()
+            fr = wr.getframerate()
+            fn = wr.getnframes()
+            data = wr.readframes(fn)
+            total_time = 1.0 * fn / fr
+            frames = int(ch * fr * self.length)
+
+        X = np.frombuffer(data, dtype=np.int16)
+
+        # length単位で音声ファイルを切り出す
+        grid_num = int(np.ceil(total_time / self.length))
+        for i in range(grid_num):
+            filename = f'./input/target_{self.today}_{uuid.uuid4()}_{i}.wav'
+            wavfile.write(filename, fr, X[i * frames:i * frames + frames])
+            filenames.append(filename)
+
+        return filenames
+
+
+    def __call__(self, inp):
+        self.read_write_tmp_file(inp, save_to_blob=True)
+        filenames = self.divide_wav()
+
+        return filenames, self.audio_file_path
+
 
 
 def recognize_audio(output, speech_key, service_region, language, filename, recognize_time=100):
@@ -87,9 +186,9 @@ def recognize_audio(output, speech_key, service_region, language, filename, reco
     speech_config = speechsdk.SpeechConfig(subscription=speech_key, region=service_region)
     speech_config.enable_dictation()
     # Language Setting
-    if language == 'Japanese':
+    if language == '日本語':
         speech_config.speech_recognition_language = "ja-JP"
-    elif language == 'English':
+    elif language == '英語':
         speech_config.speech_recognition_language = "en-US"
 
     # Recognizing
@@ -104,9 +203,6 @@ def recognize_audio(output, speech_key, service_region, language, filename, reco
 
     speech_recognizer.start_continuous_recognition()
     time.sleep(recognize_time)
-
-    # テキストを句点箇所で改行。
-    output = output.replace('。', '。\n')
 
     return output
 
