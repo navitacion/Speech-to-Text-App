@@ -2,8 +2,6 @@
 
 Azure Speech SDKを使用したSpeech-to-Textアプリ。
 
-デプロイ済みアプリは[こちら](https://speechtotextdemoapp.azurewebsites.net/)
-
 [参考URL](https://docs.microsoft.com/ja-jp/azure/cognitive-services/speech-service/get-started-speech-to-text?tabs=script%2Cwindowsinstall&pivots=programming-language-python)
 
 ## 更新履歴
