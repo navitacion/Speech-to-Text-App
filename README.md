@@ -2,9 +2,17 @@
 
 Azure Speech SDKを使用したSpeech-to-Textアプリ。
 
+デプロイ済みアプリは[こちら](https://speechtotextdemoapp.azurewebsites.net/)
+
 [参考URL](https://docs.microsoft.com/ja-jp/azure/cognitive-services/speech-service/get-started-speech-to-text?tabs=script%2Cwindowsinstall&pivots=programming-language-python)
 
 ## 更新履歴
+- 2021.02.17
+  - Slackとの連携が実現
+  - Slackのチャンネルに文字起こしテキストをアップロードする
+  - アプリ画面上でメンションの設定が可能
+  
+
 - 2021.01.20
   - 動画（mp4）での読み込み対応可能に
   
@@ -50,16 +58,16 @@ Azure Speech SDKを使用したSpeech-to-Textアプリ。
 
 ## ローカル実行方法
 
-config.ymlの各項目をAzureのSpeech Services, Storageのキーと地域で上書きする
+.env.sampleの各項目をそれぞれ設定を行い、`.env`とリネームする
 
 ```
-subscription:
-  speech_key: <YOUR KEY>
-  service_region: <YOUR REGION>
-  
-blob:
-  account_name: <YOUR STORAGE ACCOUNT NAME>
-  account_key: <YOUR STORAGE ACCOUNT KEY>
+SPEECH_KEY = "<Azure Speech Service Key>"
+SPEECH_SERVICE_REGION = "<Azure Speech Service Region Name>"
+BLOB_ACCOUNT_KEY = "<Azure Blob Account Key>"
+BLOB_ACCOUNT_NAME = "<Azure Blob Account Name>"
+SLACK_CHANNEL_ID = "<Slack Channel ID>"
+SLACK_OAUTH_TOKEN = "<Slack OAuth Token>"
+SLACK_WEBHOOK_URL = "<Slack Webhook URL>"
 ```
 
 
@@ -72,8 +80,12 @@ docker-compose up -d
 アプリは以下よりアクセスできます。
 
 ```
-http://localhost/80
+http://localhost:80
 ```
+
+### **注意**
+
+ソースにある`DEBUG`を`TRUE`にすることで、ローカルで実行できます。
 
 
 ## アプリの操作方法
@@ -88,5 +100,36 @@ http://localhost/80
 
 ## Azure上のデプロイ方法
 
-[チュートリアル](https://docs.microsoft.com/en-us/azure/container-instances/tutorial-docker-compose)を参照のこと
+### **注意**
+
+ソースにある`DEBUG`が`FALSE`であることを確認し、下記手順に従い実施する。
+
+
+ターミナルを用いてAzureにログインする
+
+```commandline
+az login
+```
+
+ログイン後に、Azure Container Registry にログインする
+
+```commandline
+az acr login --name <Registiry Name>
+```
+
+Webアプリを構成するDockerを一度構築してから落としておく
+
+```commandline
+docker-compose up --build -d
+docker-compose down
+```
+
+Azure Container Registryにプッシュする
+
+```commandline
+docker-compose push
+```
+
+より詳細な内容は、[チュートリアル](https://docs.microsoft.com/en-us/azure/container-instances/tutorial-docker-compose)
+を参照のこと
 
